@@ -7,6 +7,7 @@
 !.env.*.example
 !*.env.example
 /LOCAL_DATABASES.md
+/RELEASE_REVIEW.md
 /.aws/
 /.codex/
 /.agents/

@@ -157,8 +157,7 @@ paths:
       summary: Получить inventory по идентификатору товара
       description: |
         Поиск использует id как передан, без нормализации регистра и пробелов.
-        Известная ошибка Gateway: product_name заполняется значением product_id,
-        а не названием товара. Схема и пример отражают текущий HTTP-ответ.
+        Поле product_name содержит название товара из Inventory.
       parameters:
         - name: id
           in: path
@@ -171,14 +170,14 @@ paths:
           example: product-001
       responses:
         '200':
-          description: Запись найдена; product_name фактически равен product_id
+          description: Запись найдена
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/InventoryResponse'
               example:
                 product_id: product-001
-                product_name: product-001
+                product_name: Клавиатура
                 category_id: peripherals
                 stock: 8
                 unit_price_minor: 1500
@@ -285,7 +284,7 @@ components:
           type: string
         product_name:
           type: string
-          description: POST возвращает название, GET из-за ошибки Gateway возвращает product_id.
+          description: Название товара; возвращается при создании и чтении.
         category_id:
           type: string
         stock:
