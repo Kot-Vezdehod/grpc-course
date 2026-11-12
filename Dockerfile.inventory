@@ -1,0 +1,24 @@
+# Этап 1: сборка Go-приложения
+FROM golang:1.27.1-alpine AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 go build -o /inventory ./cmd/inventory-server
+
+# Этап 2: запуск приложения
+FROM alpine:3.22
+
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /app
+
+COPY --from=builder /inventory /app/inventory
+
+EXPOSE 50053
+
+CMD ["/app/inventory"]

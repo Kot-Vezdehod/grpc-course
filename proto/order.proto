@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package order;
+
+option go_package = "grpc-course/gen/order;order";
+
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (CreateOrderResponse);
+  rpc WatchOrder(WatchOrderRequest) returns (stream WatchOrderResponse);
+  rpc CalculateOrderTotal(stream OrderItemRequest) returns (OrderTotalResponse);
+}
+
+message OrderItem {
+  string product_id = 1;
+  int64 quantity = 2;
+  int64 unit_price_minor = 3;
+}
+
+message CreateOrderRequest {
+  string id = 1;
+  string currency = 2;
+  repeated OrderItem items = 3;
+}
+
+message CreateOrderResponse {
+  string id = 1;
+}
+
+message WatchOrderRequest {
+  string id = 1;
+}
+
+message WatchOrderResponse {
+  string id = 1;
+  string status = 2;
+}
+
+message OrderItemRequest {
+  int64 quantity = 1;
+}
+
+message OrderTotalResponse {
+  int64 total_quantity = 1;
+}

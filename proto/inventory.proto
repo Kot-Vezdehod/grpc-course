@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package inventory;
+
+option go_package = "grpc-course/gen/inventory;inventory";
+
+service InventoryService {
+  rpc CreateInventory(CreateInventoryRequest) returns (Inventory);
+  rpc GetInventoryByID(InventoryItemRequest) returns (Inventory);
+
+  rpc ReserveStock(ReserveStockRequest) returns (ReserveStockResponse);
+}
+
+message Inventory {
+  string product_id = 1;
+  string product_name = 2;
+  string category_id = 3;
+  int64 stock = 4;
+  int64 unit_price_minor = 5;
+}
+
+message CreateInventoryRequest {
+  string product_id = 1;
+  string product_name = 2;
+  string category_id = 3;
+  int64 stock = 4;
+  int64 unit_price_minor = 5;
+}
+
+message InventoryItemRequest {
+  string product_id = 1;
+}
+
+message ReserveStockRequest {
+  string order_id = 1;
+  string product_id = 2;
+  int64 quantity = 3;
+}
+
+message ReserveStockResponse {
+  bool reserved = 1;
+}

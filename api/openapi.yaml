@@ -1,0 +1,354 @@
+openapi: 3.1.0
+info:
+  title: Go Microservices REST API Gateway
+  version: 0.1.0
+  description: |
+    Реализованные бизнес-маршруты Gateway (служебный GET /health вне этой спецификации).
+    MVP поддерживает ровно одну позицию заказа; quantity может быть больше единицы.
+    JSON соответствует HTTP DTO, числа int64 передаются JSON-числами.
+    Неизвестные поля JSON отклоняются. Content-Type запроса Gateway не проверяет.
+    Обязательность и ограничения ниже отражают бизнес-валидацию; Gateway сам
+    выполняет только декодирование JSON. Отсутствующие скалярные поля и null
+    декодируются в нулевые значения Go; поэтому stock и цена позиции заказа
+    могут отсутствовать (получается 0). Для клиентов рекомендуется передавать
+    типизированные значения согласно схемам, без null.
+    Ошибки gRPC преобразуются в HTTP: InvalidArgument → 400, NotFound → 404,
+    AlreadyExists/FailedPrecondition → 409, Unavailable → 503,
+    DeadlineExceeded → 504, остальные коды → 500.
+    Детали gRPC-валидации и исходные сообщения Gateway не передаёт.
+    Стандартные ответы маршрутизатора (например, 404/405 вне обработчиков)
+    имеют text/plain и не используют ErrorResponse.
+servers:
+  - url: http://localhost:8080
+    description: Локальный Gateway
+security: []
+x-implementation-discrepancies:
+  - GET inventory возвращает product_id в product_name вместо названия товара.
+  - Gateway не передаёт клиенту gRPC BadRequest field violations.
+  - DTO quantity допускает int64, но orders.order_items.quantity хранится как INTEGER (32 бита); большие значения могут приводить к 500 вместо 400.
+  - Сумма quantity * unit_price_minor вычисляется в int64 без проверки переполнения.
+  - Inventory нормализует идентификаторы при создании, но не при чтении или резервировании.
+  - Order проверяет строки только на пустоту; Inventory дополнительно использует TrimSpace.
+  - Схемы описывают типизированные запросы; декодер Go также принимает null как нулевое значение скаляра.
+tags:
+  - name: Orders
+  - name: Inventory
+paths:
+  /api/v1/orders:
+    post:
+      tags: [Orders]
+      operationId: createOrder
+      summary: Создать заказ
+      description: |
+        Резервирует остаток единственной позиции, сохраняет заказ и создаёт платёж.
+        Цена берётся из запроса; сверка с ценой inventory не реализована.
+        При ошибке платежа заказ уже может быть сохранён, а остаток зарезервирован;
+        откат и гарантия безопасного повторения запроса отсутствуют.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+            example:
+              id: order-001
+              currency: RUB
+              items:
+                - product_id: product-001
+                  quantity: 2
+                  unit_price_minor: 1500
+      responses:
+        '201':
+          description: Заказ и платёж созданы
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateOrderResponse'
+              example: {id: order-001}
+        '400':
+          description: Некорректный JSON, неизвестные поля или нарушение бизнес-ограничений (включая число позиций MVP).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidJSON:
+                  value: {error: {code: InvalidArgument, message: invalid JSON}}
+                validation:
+                  value: {error: {code: InvalidArgument, message: order creation failed}}
+        '409':
+          description: Заказ уже существует, конфликт резервирования (AlreadyExists) или недостаточный остаток (FailedPrecondition).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                duplicate:
+                  value: {error: {code: AlreadyExists, message: order creation failed}}
+                insufficientStock:
+                  value: {error: {code: FailedPrecondition, message: order creation failed}}
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/DeadlineExceeded'
+  /api/v1/inventory:
+    post:
+      tags: [Inventory]
+      operationId: createInventory
+      summary: Создать запись inventory
+      description: |
+        product_id и category_id обрезаются по краям и приводятся к нижнему регистру;
+        product_name обрезается по краям. Это создание новой записи, не пополнение остатка.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInventoryRequest'
+            example:
+              product_id: product-001
+              product_name: Клавиатура
+              category_id: peripherals
+              stock: 10
+              unit_price_minor: 1500
+      responses:
+        '201':
+          description: Запись создана; возвращаются нормализованные значения
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryResponse'
+              example:
+                product_id: product-001
+                product_name: Клавиатура
+                category_id: peripherals
+                stock: 10
+                unit_price_minor: 1500
+        '400':
+          description: Некорректный JSON, неизвестные поля или нарушение ограничений inventory.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidJSON:
+                  value: {error: {code: InvalidArgument, message: invalid JSON}}
+                validation:
+                  value: {error: {code: InvalidArgument, message: inventory creation failed}}
+        '409':
+          description: Запись с таким product_id уже существует
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: {error: {code: AlreadyExists, message: inventory creation failed}}
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/DeadlineExceeded'
+  /api/v1/inventory/{id}:
+    get:
+      tags: [Inventory]
+      operationId: getInventoryByID
+      summary: Получить inventory по идентификатору товара
+      description: |
+        Поиск использует id как передан, без нормализации регистра и пробелов.
+        Известная ошибка Gateway: product_name заполняется значением product_id,
+        а не названием товара. Схема и пример отражают текущий HTTP-ответ.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Непустой после TrimSpace идентификатор; используйте нормализованный product_id из ответа создания.
+          schema:
+            type: string
+            minLength: 1
+            pattern: '\S'
+          example: product-001
+      responses:
+        '200':
+          description: Запись найдена; product_name фактически равен product_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryResponse'
+              example:
+                product_id: product-001
+                product_name: product-001
+                category_id: peripherals
+                stock: 8
+                unit_price_minor: 1500
+        '400':
+          description: Идентификатор состоит из пробелов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: {error: {code: InvalidArgument, message: failed to retrieve inventory}}
+        '404':
+          description: Запись inventory не найдена
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: {error: {code: NotFound, message: failed to retrieve inventory}}
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+        '504':
+          $ref: '#/components/responses/DeadlineExceeded'
+components:
+  schemas:
+    NonEmptyString:
+      type: string
+      minLength: 1
+      description: Непустая строка; формат UUID не требуется, максимальная длина не проверяется бизнес-валидацией.
+    InventoryInputString:
+      allOf:
+        - $ref: '#/components/schemas/NonEmptyString'
+      pattern: '\S'
+      description: Должна содержать непробельный символ; точная серверная проверка использует Go strings.TrimSpace (Unicode).
+    NonNegativeInt64:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9223372036854775807
+    PositiveInt64:
+      type: integer
+      format: int64
+      minimum: 1
+      maximum: 9223372036854775807
+    CreateOrderRequest:
+      type: object
+      additionalProperties: false
+      required: [id, currency, items]
+      properties:
+        id:
+          $ref: '#/components/schemas/NonEmptyString'
+        currency:
+          $ref: '#/components/schemas/NonEmptyString'
+          description: Непустая строка; длина, регистр и принадлежность ISO 4217 не проверяются.
+        items:
+          type: array
+          minItems: 1
+          maxItems: 1
+          description: Ровно одна позиция согласно ограничению MVP в OrderService.
+          items:
+            $ref: '#/components/schemas/OrderItem'
+    OrderItem:
+      type: object
+      additionalProperties: false
+      required: [product_id, quantity]
+      properties:
+        product_id:
+          $ref: '#/components/schemas/NonEmptyString'
+          description: Order проверяет только непустоту; для резервирования нужен существующий идентификатор inventory.
+        quantity:
+          $ref: '#/components/schemas/PositiveInt64'
+        unit_price_minor:
+          $ref: '#/components/schemas/NonNegativeInt64'
+          description: Цена за единицу в минимальных денежных единицах; отсутствие даёт 0. Цена 0 допустима для заказа.
+    CreateOrderResponse:
+      type: object
+      required: [id]
+      properties:
+        id:
+          type: string
+    CreateInventoryRequest:
+      type: object
+      additionalProperties: false
+      required: [product_id, product_name, category_id, unit_price_minor]
+      properties:
+        product_id:
+          $ref: '#/components/schemas/InventoryInputString'
+        product_name:
+          $ref: '#/components/schemas/InventoryInputString'
+        category_id:
+          $ref: '#/components/schemas/InventoryInputString'
+        stock:
+          $ref: '#/components/schemas/NonNegativeInt64'
+          description: Начальный остаток; отсутствие даёт 0.
+        unit_price_minor:
+          $ref: '#/components/schemas/PositiveInt64'
+          description: Цена в минимальных денежных единицах; для inventory должна быть строго положительной.
+    InventoryResponse:
+      type: object
+      description: HTTP DTO CreateInventoryResponse, используемый и POST, и GET.
+      required: [product_id, product_name, category_id, stock, unit_price_minor]
+      properties:
+        product_id:
+          type: string
+        product_name:
+          type: string
+          description: POST возвращает название, GET из-за ошибки Gateway возвращает product_id.
+        category_id:
+          type: string
+        stock:
+          type: integer
+          format: int64
+        unit_price_minor:
+          type: integer
+          format: int64
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Имя кода gRPC (например, InvalidArgument, AlreadyExists, FailedPrecondition, NotFound, Internal, Unavailable, DeadlineExceeded).
+        message:
+          type: string
+          enum:
+            - invalid JSON
+            - order creation failed
+            - inventory creation failed
+            - failed to retrieve inventory
+            - failed to encode response
+          description: Фиксированное сообщение Gateway; field violations и текст ошибки сервиса не передаются.
+  responses:
+    InternalError:
+      description: |
+        Ошибка сервиса или иной код gRPC без отдельного HTTP-маппинга (500).
+        message соответствует операции: order creation failed, inventory creation failed
+        или failed to retrieve inventory. При ошибке сериализации code=Internal,
+        message=failed to encode response. Аварийный fallback writeJSONError
+        использует text/plain; при ошибке записи уже отправленный статус изменить нельзя.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {error: {code: Internal, message: order creation failed}}
+        text/plain:
+          schema: {type: string}
+          example: "internal server error\n"
+    Unavailable:
+      description: |
+        gRPC-сервис недоступен (Unavailable). message зависит от операции:
+        order creation failed, inventory creation failed или failed to retrieve inventory.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {error: {code: Unavailable, message: inventory creation failed}}
+    DeadlineExceeded:
+      description: |
+        Превышен срок gRPC-вызова (DeadlineExceeded). message зависит от операции:
+        order creation failed, inventory creation failed или failed to retrieve inventory.
+        Gateway собственного таймаута не задаёт; OrderService ограничивает вызовы
+        резервирования и платежа двумя секундами каждый.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example: {error: {code: DeadlineExceeded, message: order creation failed}}
