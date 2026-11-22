@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -50,18 +51,36 @@ func (s *server) SayHello(ctx context.Context, req *hello.HelloRequest) (*hello.
 }
 
 // connectDB открывает и проверяет подключение к базе данных заказов.
-func connectDB(ctx context.Context) (*sql.DB, error) {
+func orderDatabaseDSN() (string, error) {
 	dsn := strings.TrimSpace(os.Getenv("ORDER_DATABASE_URL"))
-	if dsn == "" {
-		return nil, fmt.Errorf("ORDER_DATABASE_URL is required")
+	if dsn != "" {
+		return dsn, nil
 	}
 
-	db, err := sql.Open(
-		"pgx",
-		dsn,
-	)
+	host, port := os.Getenv("ORDER_DB_HOST"), os.Getenv("ORDER_DB_PORT")
+	name, user := os.Getenv("ORDER_DB_NAME"), os.Getenv("ORDER_DB_USER")
+	passwordFile := os.Getenv("ORDER_DB_PASSWORD_FILE")
+	if host == "" || port == "" || name == "" || user == "" || passwordFile == "" {
+		return "", fmt.Errorf("ORDER_DATABASE_URL is required, or all ORDER_DB settings must be provided")
+	}
+	password, err := os.ReadFile(passwordFile)
 	if err != nil {
-		return nil, fmt.Errorf("connectDB: %w", err)
+		return "", fmt.Errorf("cannot read ORDER_DB_PASSWORD_FILE")
+	}
+	passwordText := strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r")
+	u := url.URL{Scheme: "postgres", User: url.UserPassword(user, passwordText), Host: net.JoinHostPort(host, port), Path: "/" + name}
+	return u.String(), nil
+}
+
+func connectDB(ctx context.Context) (*sql.DB, error) {
+	dsn, err := orderDatabaseDSN()
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("connectDB: invalid database configuration")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -69,7 +88,7 @@ func connectDB(ctx context.Context) (*sql.DB, error) {
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("connectDB: %w", err)
+		return nil, fmt.Errorf("connectDB: database connection failed")
 	}
 
 	return db, nil
@@ -131,6 +150,13 @@ func newTimingInterceptor(
 }
 
 // Main настраивает зависимости и запускает gRPC-сервер.
+func paymentTLSServerName() string {
+	if name := os.Getenv("PAYMENT_TLS_SERVER_NAME"); name != "" {
+		return name
+	}
+	return "localhost"
+}
+
 func main() {
 	logger := slog.New(
 		slog.NewJSONHandler(os.Stdout, nil),
@@ -194,7 +220,7 @@ func main() {
 
 	tlsConfig := &tls.Config{
 		RootCAs:      certPool,
-		ServerName:   "localhost",
+		ServerName:   paymentTLSServerName(),
 		Certificates: []tls.Certificate{clientCert},
 	}
 	creds := credentials.NewTLS(tlsConfig)

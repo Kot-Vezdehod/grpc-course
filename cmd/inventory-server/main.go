@@ -11,6 +11,7 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -19,19 +20,36 @@ import (
 	"google.golang.org/grpc"
 )
 
-// connectDB открывает подключение к базе данных inventory и проверяет его с тайм-аутом.
-func connectDB(ctx context.Context) (*sql.DB, error) {
+func inventoryDatabaseDSN() (string, error) {
 	dsn := strings.TrimSpace(os.Getenv("INVENTORY_DATABASE_URL"))
-	if dsn == "" {
-		return nil, fmt.Errorf("INVENTORY_DATABASE_URL is required")
+	if dsn != "" {
+		return dsn, nil
 	}
 
-	db, err := sql.Open(
-		"pgx",
-		dsn,
-	)
+	host, port := os.Getenv("INVENTORY_DB_HOST"), os.Getenv("INVENTORY_DB_PORT")
+	name, user := os.Getenv("INVENTORY_DB_NAME"), os.Getenv("INVENTORY_DB_USER")
+	passwordFile := os.Getenv("INVENTORY_DB_PASSWORD_FILE")
+	if host == "" || port == "" || name == "" || user == "" || passwordFile == "" {
+		return "", fmt.Errorf("INVENTORY_DATABASE_URL is required, or all INVENTORY_DB settings must be provided")
+	}
+	password, err := os.ReadFile(passwordFile)
 	if err != nil {
-		return nil, fmt.Errorf("connectDB: %w", err)
+		return "", fmt.Errorf("cannot read INVENTORY_DB_PASSWORD_FILE")
+	}
+	passwordText := strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r")
+	u := url.URL{Scheme: "postgres", User: url.UserPassword(user, passwordText), Host: net.JoinHostPort(host, port), Path: "/" + name}
+	return u.String(), nil
+}
+
+// connectDB открывает подключение к базе данных inventory и проверяет его с тайм-аутом.
+func connectDB(ctx context.Context) (*sql.DB, error) {
+	dsn, err := inventoryDatabaseDSN()
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("connectDB: invalid database configuration")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -39,7 +57,7 @@ func connectDB(ctx context.Context) (*sql.DB, error) {
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("connectDB: %w", err)
+		return nil, fmt.Errorf("connectDB: database connection failed")
 	}
 
 	return db, nil
