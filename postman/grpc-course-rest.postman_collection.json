@@ -1,0 +1,148 @@
+{
+  "info": {
+    "name": "grpc-course REST",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Локальный REST-сценарий MVP. Требуются запущенные сервисы, миграции и mTLS Order–Payment. Запускать запросы по порядку; первый создаёт новые идентификаторы. Сценарий оставляет товар, заказ, платёж и резерв в тестовой базе."
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8080",
+      "type": "string"
+    },
+    {
+      "key": "product_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "order_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Создать товар",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/inventory",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"product_id\": \"{{product_id}}\",\n  \"product_name\": \"REST demo\",\n  \"category_id\": \"demo\",\n  \"stock\": 10,\n  \"unit_price_minor\": 1500\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const suffix = pm.variables.replaceIn(\"{{$guid}}\");",
+              "pm.collectionVariables.set(\"product_id\", \"rest-product-\" + suffix);",
+              "pm.collectionVariables.set(\"order_id\", \"rest-order-\" + suffix);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", function () { pm.response.to.have.status(201); });",
+              "pm.test(\"Остаток 10\", function () { pm.expect(pm.response.json().stock).to.eql(10); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Проверить начальный остаток",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/inventory/{{product_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Остаток 10\", function () { pm.expect(pm.response.json().stock).to.eql(10); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Создать заказ",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/orders",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"id\": \"{{order_id}}\",\n  \"currency\": \"RUB\",\n  \"items\": [\n    {\n      \"product_id\": \"{{product_id}}\",\n      \"quantity\": 2,\n      \"unit_price_minor\": 1500\n    }\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 201\", function () { pm.response.to.have.status(201); });",
+              "pm.test(\"Идентификатор заказа\", function () { pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get(\"order_id\")); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Проверить остаток после заказа",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{base_url}}/api/v1/inventory/{{product_id}}"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"HTTP 200\", function () { pm.response.to.have.status(200); });",
+              "pm.test(\"Остаток 8\", function () { pm.expect(pm.response.json().stock).to.eql(8); });"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
