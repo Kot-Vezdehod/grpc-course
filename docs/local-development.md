@@ -2,7 +2,106 @@
 
 [Обзор проекта](../README.md) · [mTLS](mtls.md) · [API](api.md) · [Тесты](testing.md)
 
-## Требования и сборка
+## Docker Compose
+
+Нужны Docker Engine, Compose v2 с поддержкой `up --wait`, Buildx, OpenSSL,
+Bash и curl. Команды выполняются из корня проекта. Это локальная среда MVP:
+снаружи доступен только HTTP Gateway на `127.0.0.1:8080`, gRPC и PostgreSQL
+доступны внутри сети Compose. Сервисы находят зависимости по DNS-именам Compose.
+
+### Сборка образов
+
+Общий Dockerfile выбирает приложение через `SERVICE`. `--load` загружает образ
+в локальный Docker Engine, где его использует Compose:
+
+```bash
+docker buildx build --load --build-arg SERVICE=api-gateway -t grpc-gateway:dev .
+docker buildx build --load --build-arg SERVICE=order-server -t grpc-order:dev .
+docker buildx build --load --build-arg SERVICE=inventory-server -t grpc-inventory:dev .
+docker buildx build --load --build-arg SERVICE=payment-server -t grpc-payment:dev .
+docker compose --profile migration build order-migrate inventory-migrate payment-migrate
+```
+
+Go toolchain остаётся в builder-stage, runtime содержит бинарник и CA-сертификаты.
+Мигратор собирается отдельно из `Dockerfile.migrate` с версией Goose из `go.mod`.
+У приложений в Compose указан только `image`: команда `up --build` сама
+не собирает четыре Go-образа.
+
+### Локальные секреты и сертификаты
+
+Для нового клона следующий блок создаёт три случайных пароля с закрытыми правами.
+Он остановится, если каталог уже существует:
+
+```bash
+(
+  set -eu
+  umask 077
+  mkdir local-secrets
+  openssl rand -hex 32 > local-secrets/order_password.txt
+  openssl rand -hex 32 > local-secrets/inventory_password.txt
+  openssl rand -hex 32 > local-secrets/payment_password.txt
+)
+```
+
+Затем создаются [mTLS-сертификаты](mtls.md) по инструкции для нового клона.
+Серверный сертификат содержит `DNS:payment` и `DNS:localhost`. Compose монтирует
+сертификаты только для чтения; приватный ключ CA приложениям не передаётся.
+`certs/` и `local-secrets/` исключены из Git и Docker build context.
+
+Compose передаёт пароли файлами в `/run/secrets/`. Исходные файлы остаются
+на хосте. Пароль PostgreSQL применяется при первой инициализации volume:
+изменение файла не меняет пароль уже созданной роли.
+
+### PostgreSQL и миграции
+
+```bash
+docker compose config -q
+docker compose --profile migration config -q
+docker compose up -d --wait order-db inventory-db payment-db
+docker compose --profile migration run --rm order-migrate
+docker compose --profile migration run --rm inventory-migrate
+docker compose --profile migration run --rm payment-migrate
+```
+
+Каждая команда мигратора должна завершиться успешно до запуска приложений.
+Миграторы одноразовые: читают пароль из secret в `PGPASSWORD` и запускают Goose
+`up`. SQL-файлы из `migrations/` подключены read-only bind mounts, поэтому
+исключение миграций из build context не мешает их применению.
+Каждая БД использует отдельный именованный volume на `/var/lib/postgresql`.
+Healthcheck `pg_isready` подтверждает готовность PostgreSQL принимать подключения,
+но не наличие схемы или готовность приложений.
+
+### Запуск, проверка и остановка
+
+```bash
+docker compose up -d payment inventory order api-gateway
+docker compose ps
+curl -i http://127.0.0.1:8080/health
+```
+
+Приложениям может потребоваться время на запуск. Ответ `200 OK` с телом `OK`
+подтверждает доступность Gateway. Для проверки всей цепочки используется
+[REST-сценарий](api.md): сначала создание товара, затем заказ и проверка остатка.
+
+Остановка с сохранением контейнеров и последующий запуск:
+
+```bash
+docker compose stop
+docker compose start
+```
+
+Удаление контейнеров и сетей с сохранением данных PostgreSQL:
+
+```bash
+docker compose down
+```
+
+Именованные volumes сохраняются. Флаг `-v` удаляет их вместе с данными
+и для обычной остановки не используется.
+
+## Запуск бинарников на хосте
+
+### Требования и сборка
 
 - Go 1.27.1 или новее в ветке Go 1.27, доступ к зависимостям или готовый module cache.
 - PostgreSQL 18 для воспроизведения тестовой среды, три отдельные базы и роли.
@@ -26,7 +125,7 @@ go build -o bin/api-gateway ./cmd/api-gateway
 
 Сборка использует `cmd/`, `internal/`, `gen/`, `go.mod`, `go.sum`.
 Контракты находятся в `proto/`; готовые Go-файлы в `gen/` сохранены в проекте,
-поэтому обычная сборка не требует protoc. `main.go` и `cmd/client/` — учебные
+поэтому обычная сборка не требует protoc. `main.go` и `cmd/client/` — демонстрационные
 точки входа. Основной сценарий использует четыре приложения из `cmd/`.
 
 Установка Goose CLI без изменения зависимостей проекта:
@@ -72,8 +171,11 @@ export PAYMENT_DATABASE_URL='host=127.0.0.1 port=5432 dbname=grpc_payments user=
 | `PAYMENT_DATABASE_URL` | Payment |
 
 Переменные экспортируются в терминале запуска соответствующего сервиса.
-Fallback DSN нет: отсутствие, пустое или пробельное значение даёт ошибку
-`<ИМЯ_ПЕРЕМЕННОЙ> is required` до подключения к БД. `.env` автоматически не
+URL имеет приоритет. Вместо URL можно задать полный набор `<SERVICE>_DB_HOST`,
+`<SERVICE>_DB_PORT`, `<SERVICE>_DB_NAME`, `<SERVICE>_DB_USER` и
+`<SERVICE>_DB_PASSWORD_FILE`, где `<SERVICE>` — `ORDER`, `INVENTORY` или `PAYMENT`.
+В файле хранится пароль; завершающий перевод строки удаляется. Без URL или
+полного набора настроек приложение завершится с ошибкой до подключения к БД. `.env` автоматически не
 загружается. `sslmode=disable` в примере относится к локальной PostgreSQL;
 это отдельное соединение от gRPC mTLS.
 
@@ -116,7 +218,8 @@ GOOSE_DRIVER=postgres GOOSE_DBSTRING="$ORDER_DATABASE_URL" goose -dir migrations
 `ADDRESS` переопределяет адрес конкретного gRPC-сервиса и задаётся для каждого
 процесса отдельно. У Order доступны `PAYMENT_SERVICE_ADDR` (по умолчанию
 `localhost:50052`) и `INVENTORY_SERVICE_ADDRESS` (`localhost:50053`). Gateway
-использует фиксированные локальные адреса Order и Inventory и слушает все
+использует `ORDER_SERVICE_ADDRESS` и `INVENTORY_SERVICE_ADDRESS`
+(по умолчанию `localhost:50051` и `localhost:50053`) и слушает все
 интерфейсы на `:8080`. Конфигурация рассчитана на локальную разработку.
 
 ```bash
