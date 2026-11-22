@@ -6,7 +6,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 go build -o /order-service ./cmd/order-server
+
+ARG SERVICE
+RUN CGO_ENABLED=0 go build -o /server ./cmd/${SERVICE}
 
 FROM alpine:3.22
 
@@ -14,6 +16,6 @@ RUN apk add --no-cache ca-certificates
 
 WORKDIR /app
 
-COPY --from=builder /order-service ./order-service
+COPY --from=builder /server ./server
 
-CMD ["./order-service"]
+CMD ["./server"]

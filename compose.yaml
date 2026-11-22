@@ -1,0 +1,213 @@
+name: grpc-course-dev
+
+services:
+  api-gateway:
+    image: grpc-gateway:dev
+    environment:
+      ORDER_SERVICE_ADDRESS: "order:50051"
+      INVENTORY_SERVICE_ADDRESS: "inventory:50053"
+    networks:
+      - frontend
+      - backend
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  order:
+    image: grpc-order:dev
+    networks:
+      - backend
+    environment:
+      ADDRESS: ":50051"
+      ORDER_DB_HOST: order-db
+      ORDER_DB_PORT: "5432"
+      ORDER_DB_NAME: order_db
+      ORDER_DB_USER: order_user
+      ORDER_DB_PASSWORD_FILE: /run/secrets/order_db_password
+      PAYMENT_SERVICE_ADDR: payment:50052
+      PAYMENT_TLS_SERVER_NAME: payment
+      INVENTORY_SERVICE_ADDRESS: "inventory:50053"
+    secrets:
+      - order_db_password
+    depends_on:
+      order-db:
+        condition: service_healthy
+    volumes:
+      - ./certs/ca.crt:/app/certs/ca.crt:ro
+      - ./certs/order-client.crt:/app/certs/order-client.crt:ro
+      - ./certs/order-client.key:/app/certs/order-client.key:ro
+
+
+  inventory:
+    image: grpc-inventory:dev
+    networks:
+      - backend
+    environment:
+      ADDRESS: ":50053"
+      INVENTORY_DB_HOST: inventory-db
+      INVENTORY_DB_PORT: "5432"
+      INVENTORY_DB_NAME: inventory_db
+      INVENTORY_DB_USER: inventory_user
+      INVENTORY_DB_PASSWORD_FILE: /run/secrets/inventory_db_password
+    secrets:
+      - inventory_db_password
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+
+  payment:
+    image: grpc-payment:dev
+    networks:
+      - backend
+    environment:
+      ADDRESS: ":50052"
+      PAYMENT_DB_HOST: payment-db
+      PAYMENT_DB_PORT: "5432"
+      PAYMENT_DB_NAME: payment_db
+      PAYMENT_DB_USER: payment_user
+      PAYMENT_DB_PASSWORD_FILE: /run/secrets/payment_db_password
+    secrets:
+      - payment_db_password
+    depends_on:
+      payment-db:
+        condition: service_healthy
+    volumes:
+      - ./certs/ca.crt:/app/certs/ca.crt:ro
+      - ./certs/payment-server.crt:/app/certs/payment-server.crt:ro
+      - ./certs/payment-server.key:/app/certs/payment-server.key:ro
+
+  payment-migrate:
+    profiles: ["migration"]
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    networks:
+      - backend
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: "host=payment-db port=5432 dbname=payment_db user=payment_user sslmode=disable"
+    secrets:
+      - payment_db_password
+    depends_on:
+      payment-db:
+        condition: service_healthy
+    volumes:
+      - ./migrations/payments:/migrations/payments:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'export PGPASSWORD="$$(cat /run/secrets/payment_db_password)"; exec goose -dir /migrations/payments up'
+
+  inventory-migrate:
+    profiles: ["migration"]
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    networks:
+      - backend
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: "host=inventory-db port=5432 dbname=inventory_db user=inventory_user sslmode=disable"
+    secrets:
+      - inventory_db_password
+    depends_on:
+      inventory-db:
+        condition: service_healthy
+    volumes:
+      - ./migrations/inventory:/migrations/inventory:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'export PGPASSWORD="$$(cat /run/secrets/inventory_db_password)"; exec goose -dir /migrations/inventory up'
+
+  order-migrate:
+    profiles: ["migration"]
+    build:
+      context: .
+      dockerfile: Dockerfile.migrate
+    networks:
+      - backend
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: "host=order-db port=5432 dbname=order_db user=order_user sslmode=disable"
+    secrets:
+      - order_db_password
+    depends_on:
+      order-db:
+        condition: service_healthy
+    volumes:
+      - ./migrations/orders:/migrations/orders:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'export PGPASSWORD="$$(cat /run/secrets/order_db_password)"; exec goose -dir /migrations/orders up'
+
+  payment-db:
+    image: postgres:18
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: payment_user
+      POSTGRES_DB: payment_db
+      POSTGRES_PASSWORD_FILE: /run/secrets/payment_db_password
+    secrets:
+      - payment_db_password
+    volumes:
+      - payment-db-dev-data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U payment_user -d payment_db" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  inventory-db:
+    image: postgres:18
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: inventory_user
+      POSTGRES_DB: inventory_db
+      POSTGRES_PASSWORD_FILE: /run/secrets/inventory_db_password
+    secrets:
+      - inventory_db_password
+    volumes:
+      - inventory-db-dev-data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U inventory_user -d inventory_db" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  order-db:
+    image: postgres:18
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: order_user
+      POSTGRES_DB: order_db
+      POSTGRES_PASSWORD_FILE: /run/secrets/order_db_password
+    secrets:
+      - order_db_password
+    volumes:
+      - order-db-dev-data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U order_user -d order_db" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+networks:
+  frontend:
+  backend:
+
+volumes:
+  order-db-dev-data:
+  inventory-db-dev-data:
+  payment-db-dev-data:
+
+secrets:
+  order_db_password:
+    file: ./local-secrets/order_password.txt
+  inventory_db_password:
+    file: ./local-secrets/inventory_password.txt
+  payment_db_password:
+    file: ./local-secrets/payment_password.txt
