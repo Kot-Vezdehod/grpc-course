@@ -4,8 +4,9 @@
 
 Order читает `certs/ca.crt`, `certs/order-client.crt`, `certs/order-client.key`;
 Payment — `certs/ca.crt`, `certs/payment-server.crt`, `certs/payment-server.key`.
-Payment проверяет клиентский сертификат, Order проверяет серверный с
-`ServerName=localhost`. Приватный ключ CA приложениям не нужен.
+Payment проверяет клиентский сертификат, Order проверяет имя сервера через
+`PAYMENT_TLS_SERVER_NAME` (по умолчанию `localhost`, в Compose — `payment`).
+Приватный ключ CA приложениям не нужен.
 
 Для нового клона следующий Bash-блок создаёт собственный локальный CA и
 сертификаты на 30 дней. Он остановится, если `certs/` уже существует, чтобы
@@ -27,7 +28,7 @@ Payment проверяет клиентский сертификат, Order пр
   openssl req -newkey rsa:3072 -nodes -sha256 \
     -keyout certs/payment-server.key -out certs/payment-server.csr \
     -subj '/CN=localhost'
-  printf '%s\n' 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+  printf '%s\n' 'subjectAltName=DNS:localhost,DNS:payment,IP:127.0.0.1' \
     'extendedKeyUsage=serverAuth' 'keyUsage=digitalSignature,keyEncipherment' \
     > certs/payment-server.ext
   openssl x509 -req -sha256 -days 30 -in certs/payment-server.csr \
@@ -41,7 +42,8 @@ Payment проверяет клиентский сертификат, Order пр
   openssl x509 -req -sha256 -days 30 -in certs/order-client.csr \
     -CA certs/ca.crt -CAkey certs/ca.key -CAserial certs/ca.srl \
     -out certs/order-client.crt -extfile certs/order-client.ext
-  openssl verify -CAfile certs/ca.crt -purpose sslserver certs/payment-server.crt
+  openssl verify -CAfile certs/ca.crt -purpose sslserver -verify_hostname payment certs/payment-server.crt
+  openssl verify -CAfile certs/ca.crt -purpose sslserver -verify_hostname localhost certs/payment-server.crt
   openssl verify -CAfile certs/ca.crt -purpose sslclient certs/order-client.crt
 )
 ```

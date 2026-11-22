@@ -13,6 +13,7 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -22,15 +23,34 @@ import (
 	"google.golang.org/grpc/credentials"
 )
 
-func connectDB(ctx context.Context) (*sql.DB, error) {
+func paymentDatabaseDSN() (string, error) {
 	dsn := strings.TrimSpace(os.Getenv("PAYMENT_DATABASE_URL"))
-	if dsn == "" {
-		return nil, fmt.Errorf("PAYMENT_DATABASE_URL is required")
+	if dsn != "" {
+		return dsn, nil
 	}
+	host, port := os.Getenv("PAYMENT_DB_HOST"), os.Getenv("PAYMENT_DB_PORT")
+	name, user := os.Getenv("PAYMENT_DB_NAME"), os.Getenv("PAYMENT_DB_USER")
+	passwordFile := os.Getenv("PAYMENT_DB_PASSWORD_FILE")
+	if host == "" || port == "" || name == "" || user == "" || passwordFile == "" {
+		return "", fmt.Errorf("PAYMENT_DATABASE_URL is required, or all PAYMENT_DB settings must be provided")
+	}
+	password, err := os.ReadFile(passwordFile)
+	if err != nil {
+		return "", fmt.Errorf("cannot read PAYMENT_DB_PASSWORD_FILE")
+	}
+	passwordText := strings.TrimSuffix(strings.TrimSuffix(string(password), "\n"), "\r")
+	u := url.URL{Scheme: "postgres", User: url.UserPassword(user, passwordText), Host: net.JoinHostPort(host, port), Path: "/" + name}
+	return u.String(), nil
+}
 
+func connectDB(ctx context.Context) (*sql.DB, error) {
+	dsn, err := paymentDatabaseDSN()
+	if err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("connectDB: %w", err)
+		return nil, fmt.Errorf("connectDB: invalid database configuration")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -38,7 +58,7 @@ func connectDB(ctx context.Context) (*sql.DB, error) {
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("connectDB: %w", err)
+		return nil, fmt.Errorf("connectDB: database connection failed")
 	}
 	return db, nil
 }

@@ -68,3 +68,52 @@ coverage.*
 /data/
 __pycache__/
 *.pyc
+
+local-secrets/
+
+# Local backups and database dumps (SQL migrations remain versioned)
+backups/
+dumps/
+*.bak
+*.bak.*
+*.backup
+*.backup.*
+*.old
+*.orig
+*.rej
+*.dump
+*.dump.*
+*.sql
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+*.sql.zst
+*.sql.zip
+*.sql.tar
+*.sql.tar.*
+*.sql.*
+*.tar
+*.tar.*
+*.tgz
+*.bkp
+*.save
+# Certificate intermediates and copies outside certs/
+*.key.*
+*.pem.*
+*.crt.*
+*.cer.*
+*.csr.*
+*.srl.*
+*.p12.*
+*.pfx.*
+*.ext
+*~
+*.swp
+*.swo
+
+# Keep migration sources; retain protection for dump suffixes
+!/migrations/**/[0-9]*.sql
+# Local Postman workspace and experimental requests
+/.postman/
+/postman/*
+!/postman/grpc-course-rest.postman_collection.json

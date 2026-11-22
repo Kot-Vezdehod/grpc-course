@@ -6,6 +6,7 @@ import (
 	gatewayhttp "grpc-course/internal/gateway/http"
 	"log"
 	"net/http"
+	"os"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -21,8 +22,17 @@ func main() {
 		}
 	})
 
+	orderAddress := os.Getenv("ORDER_SERVICE_ADDRESS")
+	if orderAddress == "" {
+		orderAddress = "localhost:50051"
+	}
+	inventoryAddress := os.Getenv("INVENTORY_SERVICE_ADDRESS")
+	if inventoryAddress == "" {
+		inventoryAddress = "localhost:50053"
+	}
+
 	conn, err := grpc.NewClient(
-		"localhost:50051",
+		orderAddress,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
@@ -31,7 +41,7 @@ func main() {
 	defer conn.Close()
 
 	inventoryConn, err := grpc.NewClient(
-		"localhost:50053",
+		inventoryAddress,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
